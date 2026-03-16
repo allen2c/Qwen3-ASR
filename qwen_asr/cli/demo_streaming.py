@@ -473,7 +473,7 @@ def parse_args():
     p = argparse.ArgumentParser(description="Qwen3-ASR Streaming Web Demo (vLLM backend)")
     p.add_argument("--asr-model-path", default="Qwen/Qwen3-ASR-1.7B", help="Model name or local path")
     p.add_argument("--host", default="0.0.0.0", help="Bind host")
-    p.add_argument("--port", type=int, default=8000, help="Bind port")
+    p.add_argument("--port", type=int, default=7860, help="Bind port")
     p.add_argument("--gpu-memory-utilization", type=float, default=0.8, help="vLLM GPU memory utilization")
 
     p.add_argument("--unfixed-chunk-num", type=int, default=4)
