@@ -1,4 +1,12 @@
-# Qwen3-ASR
+# Qwen3-ASR (DGX Spark fork — `qwen-asr-dgxspark`)
+
+> **Fork notice.** This is a downstream fork of the original [QwenLM/Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR),
+> repackaged and patched so it runs on NVIDIA DGX Spark (Grace–Blackwell, `aarch64`,
+> CUDA 13) under modern pins: `torch>=2.11`, `transformers>=5,<6`, `vllm>=0.20`.
+> The Python import name is **unchanged (`qwen_asr`)**; only the PyPI distribution
+> name is new: **`qwen-asr-dgxspark`**.
+>
+> See [Changes in this fork](#changes-in-this-fork) below for the full diff vs. upstream.
 
 <br>
 
@@ -1439,3 +1447,119 @@ If you find our paper and code useful in your research, please consider giving a
 [![Star History Chart](https://api.star-history.com/svg?repos=QwenLM/Qwen3-ASR&type=Date)](https://star-history.com/#QwenLM/Qwen3-ASR&Date)
 
 <br>
+
+---
+
+## Changes in this fork
+
+This fork (`qwen-asr-dgxspark`) is licensed under the same terms as upstream
+(Apache License 2.0). Per Apache 2.0 §4(b), the following list documents the
+modifications made relative to upstream Qwen3-ASR.
+
+### Goal
+Run `quick_inference.py` (and the rest of the `qwen_asr` Python API) on NVIDIA
+DGX Spark hardware (Grace-Blackwell, `aarch64`, CUDA 13) under modern dependency
+pins: `torch>=2.11`, `transformers>=5,<6`, `vllm>=0.20`. Upstream targets
+`transformers (v4)` and `vllm<0.15`, which do not install on this platform.
+
+### Code modifications
+
+All changes live under `qwen_asr/core/transformers_backend/` and
+`qwen_asr/inference/`. The Python import surface (`from qwen_asr import …`) is
+unchanged.
+
+1. **`modeling_qwen3_asr.py` — `@check_model_inputs()` → `@merge_with_config_defaults`**
+   In transformers v5, `check_model_inputs` is no longer a decorator factory; it
+   forwards to the renamed `merge_with_config_defaults`. The original
+   `@check_model_inputs()` call form raised `TypeError`.
+
+2. **`modeling_qwen3_asr.py` — `Qwen3ASRThinkerTextRotaryEmbedding`**
+   Reworked to follow the v5 RoPE pattern used by `Qwen2_5_VLRotaryEmbedding`:
+   reads `config.rope_parameters` (not `config.rope_scaling`), and provides a
+   local `compute_default_rope_parameters` static method because v5 dropped the
+   `'default'` entry from `ROPE_INIT_FUNCTIONS`. The interleaved MRoPE forward
+   pass is preserved unchanged.
+
+3. **`modeling_qwen3_asr.py` — `pad_token_id` lookup hardened**
+   Replaced `self.config.pad_token_id` with `getattr(..., None)` because v5
+   configs no longer return `None` by attribute fall-through; missing attributes
+   now raise `AttributeError`.
+
+4. **`modeling_qwen3_asr.py` — `prepare_inputs_for_generation` rewrite**
+   Upstream relied on `cache_position[0] != 0` to decide whether the current
+   step is a decode (and thus must not re-feed `input_features`). In v5,
+   `cache_position` is computed inside `TextModel.forward`, so the override saw
+   `None`, kept `input_features` populated on decode, and the audio embeddings
+   were merged a second time — producing the KV cache length mismatch
+   `(q=215, kv=429)` reported by SDPA. The override now computes
+   `cache_position` from `past_key_values.get_seq_length()` itself, and clears
+   both `input_features` and `feature_attention_mask` on decode steps.
+
+5. **`modeling_qwen3_asr.py` — docstring**
+   Added a `cache_position` description to
+   `Qwen3ASRThinkerTextModel.forward` and
+   `Qwen3ASRThinkerForConditionalGeneration.forward` to satisfy v5's
+   `@auto_docstring` validator.
+
+6. **`configuration_qwen3_asr.py` — init ordering**
+   `Qwen3ASRConfig.__init__` now sets `self.thinker_config` before calling
+   `super().__init__(**kwargs)`, because v5's base validator invokes
+   `self.get_text_config()` from within `super().__init__`, which previously
+   tripped over a not-yet-set `thinker_config`.
+
+7. **`configuration_qwen3_asr.py` — RoPE validator quiet list**
+   Added `ignore_keys_at_rope_validation = {"mrope_section", "mrope_interleaved", "interleaved"}`
+   to `Qwen3ASRTextConfig` so v5 no longer warns about Qwen-ASR-specific RoPE
+   keys that are consumed by `Qwen3ASRThinkerTextRotaryEmbedding` instead of the
+   built-in RoPE init functions.
+
+8. **`processing_qwen3_asr.py` — drop deprecated `feature_extractor_class`**
+   The audio feature extractor type is recorded in `preprocessor_config.json`
+   and resolved via `AutoFeatureExtractor`. Setting the class attribute is
+   deprecated in v5.
+
+9. **`inference/qwen3_asr.py` / `inference/qwen3_forced_aligner.py` — sampling-flag cleanup**
+   Added `_strip_unused_sampling_flags()` and
+   `_suppress_invalid_generation_flag_warning()`. Qwen3-ASR's HF checkpoints
+   ship a `generation_config.json` with `temperature` / `top_p` / `top_k` set
+   even though `do_sample=False`, which makes v5 log a one-shot
+   "generation flags are not valid" warning on every load. We null those keys
+   after load, and filter the load-time log so startup is quiet.
+
+### Packaging
+
+10. **`pyproject.toml`** — repackaged as a distinct distribution:
+
+    | field                | upstream `qwen-asr` 0.0.6 | this fork `qwen-asr-dgxspark` 0.1.0 |
+    | -------------------- | ------------------------- | ----------------------------------- |
+    | distribution name    | `qwen-asr`                | `qwen-asr-dgxspark`                 |
+    | import name          | `qwen_asr`                | `qwen_asr` (unchanged)              |
+    | python               | `>=3.9`                   | `>=3.10`                            |
+    | `transformers`       | unbounded                 | `>=5,<6`                            |
+    | `torch`              | unspecified               | `>=2.11,<3`                         |
+    | `vllm` (extras)      | `vllm<0.15.0`             | `vllm>=0.20,<1`                     |
+    | `gradio` / `flask`   | core deps                 | optional extra `[demo]`             |
+
+### Out-of-scope
+
+No upstream functionality was removed. The model checkpoints, the public
+`Qwen3ASRModel` / `Qwen3ForcedAligner` API, the streaming loop, the vLLM
+backend, and the example scripts are intentionally untouched, so this fork
+remains drop-in compatible with upstream usage.
+
+## License & Attribution
+
+Both upstream and this fork are distributed under the **Apache License 2.0**
+(see [`LICENSE`](LICENSE)). Per Apache 2.0 §4(a)–(c):
+
+- The original work is © Alibaba Qwen Team — <https://github.com/QwenLM/Qwen3-ASR>.
+- Modifications in this fork are © 2026 AllenChou. The list of changes is
+  reproduced in [Changes in this fork](#changes-in-this-fork) above and serves
+  as the "prominent notices" required by §4(b).
+- This fork carries forward the original `LICENSE` file unchanged.
+- Files modified in this fork retain the upstream SPDX header
+  (`SPDX-License-Identifier: Apache-2.0`).
+
+The name "Qwen" and the Qwen logo are trademarks of Alibaba Cloud, used here
+solely to identify the upstream model family. This fork is **not** endorsed by
+or affiliated with Alibaba Cloud.
