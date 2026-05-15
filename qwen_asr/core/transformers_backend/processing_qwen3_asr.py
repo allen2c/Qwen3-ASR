@@ -63,7 +63,8 @@ class Qwen3ASRProcessor(ProcessorMixin):
     """
 
     attributes = ["feature_extractor", "tokenizer"]
-    feature_extractor_class = "WhisperFeatureExtractor"
+    # v5: `feature_extractor_class` is deprecated; the actual class is recorded in
+    # `preprocessor_config.json` (feature_extractor_type) and resolved via AutoFeatureExtractor.
     tokenizer_class = ("Qwen2Tokenizer", "Qwen2TokenizerFast")
 
     def __init__(

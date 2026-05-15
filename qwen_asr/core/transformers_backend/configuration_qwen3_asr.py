@@ -226,6 +226,9 @@ class Qwen3ASRTextConfig(PretrainedConfig):
 
     model_type = "qwen3_asr_text"
     base_config_key = "text_config"
+    # Qwen3-ASR uses interleaved MRoPE; these are consumed by Qwen3ASRThinkerTextRotaryEmbedding
+    # rather than by the standard ROPE_INIT_FUNCTIONS, so silence the v5 rope-validator warning.
+    ignore_keys_at_rope_validation = {"mrope_section", "mrope_interleaved", "interleaved"}
 
     def __init__(
         self,
@@ -400,12 +403,12 @@ class Qwen3ASRConfig(PretrainedConfig):
         support_languages=None,
         **kwargs,
     ):
-        super().__init__(**kwargs)
         if thinker_config is None:
             thinker_config = {}
 
         self.thinker_config = Qwen3ASRThinkerConfig(**thinker_config)
         self.support_languages = support_languages
+        super().__init__(**kwargs)
 
     def get_text_config(self, decoder=False) -> "PretrainedConfig":
         """
