@@ -3,42 +3,51 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "qwen-asr"
-version = "0.0.6"
-description = "Qwen-ASR python package"
+name = "qwen-asr-dgxspark"
+version = "0.1.0"
+description = "Qwen3-ASR python package, patched to run on NVIDIA DGX Spark (Grace-Blackwell) with torch>=2.11, transformers>=5, vllm>=0.20."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 classifiers = [
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: POSIX :: Linux",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 license = { text = "Apache-2.0" }
-authors = [{ name = "Alibaba Qwen Team" }]
+authors = [
+  { name = "Alibaba Qwen Team" },
+  { name = "AllenChou (DGX Spark port)" },
+]
 
 dependencies = [
-  "transformers",
+  "torch>=2.11,<3",
+  "torchvision",
+  "torchaudio",
+  "transformers>=5,<6",
+  "accelerate>=1.10",
   "nagisa",
   "soynlp",
-  "accelerate",
   "qwen-omni-utils",
   "librosa",
   "soundfile",
   "sox",
-  "gradio",
-  "flask",
   "pytz",
 ]
 
 [project.optional-dependencies]
-vllm = ["vllm<0.15.0"]
+vllm = ["vllm>=0.20,<1"]
+demo = ["gradio", "flask"]
 
 [project.urls]
-Homepage = "https://github.com/Qwen/Qwen3-ASR"
-Repository = "https://github.com/Qwen/Qwen3-ASR"
+Homepage = "https://github.com/allen2c/Qwen3-ASR"
+Repository = "https://github.com/allen2c/Qwen3-ASR.git"
+Issues = "https://github.com/allen2c/Qwen3-ASR/issues"
+Upstream = "https://github.com/QwenLM/Qwen3-ASR"
 
 [project.scripts]
 qwen-asr-demo = "qwen_asr.cli.demo:main"
