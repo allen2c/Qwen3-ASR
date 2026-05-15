@@ -13,6 +13,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import contextlib
+import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union
 
@@ -52,6 +54,46 @@ try:
     ModelRegistry.register_model("Qwen3ASRForConditionalGeneration", Qwen3ASRForConditionalGeneration)
 except:
     pass
+
+
+_SAMPLING_FLAG_KEYS = ("temperature", "top_p", "top_k", "typical_p", "epsilon_cutoff", "eta_cutoff")
+
+
+def _strip_unused_sampling_flags(model) -> None:
+    """Clear sampling params on `generation_config` when `do_sample=False`.
+
+    Qwen3-ASR ships its HF checkpoint with `temperature`/`top_p`/`top_k` populated
+    even though ASR is greedy (`do_sample=False`). Without this, transformers v5
+    emits a noisy 'generation flags are not valid' warning on every load and call.
+    """
+    gc = getattr(model, "generation_config", None)
+    if gc is None or getattr(gc, "do_sample", False):
+        return
+    for key in _SAMPLING_FLAG_KEYS:
+        if getattr(gc, key, None) is not None:
+            setattr(gc, key, None)
+
+
+@contextlib.contextmanager
+def _suppress_invalid_generation_flag_warning():
+    """Silence the one-shot 'generation flags are not valid' log emitted during model load.
+
+    The warning fires from inside `from_pretrained` (before we can mutate the
+    config), so we filter it on the transformers logger for the duration of the
+    load call.
+    """
+    logger = logging.getLogger("transformers.generation.configuration_utils")
+
+    class _Filter(logging.Filter):
+        def filter(self, record):  # type: ignore[override]
+            return "generation flags are not valid" not in record.getMessage()
+
+    f = _Filter()
+    logger.addFilter(f)
+    try:
+        yield
+    finally:
+        logger.removeFilter(f)
 
 
 @dataclass
@@ -203,7 +245,9 @@ class Qwen3ASRModel:
             Qwen3ASRModel
         """
 
-        model = AutoModel.from_pretrained(pretrained_model_name_or_path, **kwargs)
+        with _suppress_invalid_generation_flag_warning():
+            model = AutoModel.from_pretrained(pretrained_model_name_or_path, **kwargs)
+        _strip_unused_sampling_flags(model)
 
         processor = AutoProcessor.from_pretrained(pretrained_model_name_or_path, fix_mistral_regex=True)
 

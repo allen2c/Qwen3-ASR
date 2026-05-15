@@ -368,7 +368,11 @@ class Qwen3ForcedAligner:
         AutoModel.register(Qwen3ASRConfig, Qwen3ASRForConditionalGeneration)
         AutoProcessor.register(Qwen3ASRConfig, Qwen3ASRProcessor)
 
-        model = AutoModel.from_pretrained(pretrained_model_name_or_path, **kwargs)
+        from .qwen3_asr import _strip_unused_sampling_flags, _suppress_invalid_generation_flag_warning
+
+        with _suppress_invalid_generation_flag_warning():
+            model = AutoModel.from_pretrained(pretrained_model_name_or_path, **kwargs)
+        _strip_unused_sampling_flags(model)
         if not isinstance(model, Qwen3ASRForConditionalGeneration):
             raise TypeError(
                 f"AutoModel returned {type(model)}, expected Qwen3ASRForConditionalGeneration."

@@ -38,7 +38,7 @@ from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS, PreTrainedModel
 from transformers.processing_utils import Unpack
 from transformers.utils import auto_docstring, can_return_tuple
 from transformers.utils.deprecation import deprecate_kwarg
-from transformers.utils.generic import TransformersKwargs, check_model_inputs
+from transformers.utils.generic import TransformersKwargs, merge_with_config_defaults
 
 from .configuration_qwen3_asr import (
     Qwen3ASRAudioEncoderConfig,
@@ -783,21 +783,36 @@ class Qwen3ASRThinkerTextRotaryEmbedding(nn.Module):
 
     def __init__(self, config: Qwen3ASRConfig, device=None):
         super().__init__()
-        if hasattr(config, "rope_scaling") and config.rope_scaling is not None:
-            self.rope_type = config.rope_scaling.get("rope_type", "default")
-        else:
-            self.rope_type = "default"
         self.max_seq_len_cached = config.max_position_embeddings
         self.original_max_seq_len = config.max_position_embeddings
 
         self.config = config
-        self.rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]
 
-        inv_freq, self.attention_scaling = self.rope_init_fn(self.config, device)
+        rope_parameters = getattr(config, "rope_parameters", None) or {}
+        self.rope_type = rope_parameters.get("rope_type", "default")
+        rope_init_fn = self.compute_default_rope_parameters
+        if self.rope_type != "default":
+            rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]
+
+        inv_freq, self.attention_scaling = rope_init_fn(self.config, device)
         self.register_buffer("inv_freq", inv_freq, persistent=False)
-        self.original_inv_freq = self.inv_freq
+        self.register_buffer("original_inv_freq", inv_freq.clone(), persistent=False)
 
-        self.mrope_section = config.rope_scaling.get("mrope_section", [24, 20, 20])
+        self.mrope_section = rope_parameters.get("mrope_section", [24, 20, 20])
+
+    @staticmethod
+    def compute_default_rope_parameters(
+        config: "Qwen3ASRConfig | None" = None,
+        device: "torch.device | None" = None,
+        seq_len: int | None = None,
+    ) -> tuple[torch.Tensor, float]:
+        base = config.rope_parameters["rope_theta"]
+        dim = getattr(config, "head_dim", None) or config.hidden_size // config.num_attention_heads
+        attention_factor = 1.0
+        inv_freq = 1.0 / (
+            base ** (torch.arange(0, dim, 2, dtype=torch.int64).to(device=device, dtype=torch.float) / dim)
+        )
+        return inv_freq, attention_factor
 
     def apply_interleaved_mrope(self, freqs, mrope_section):
         """Apply interleaved MRoPE to 3D rotary embeddings.
@@ -983,7 +998,7 @@ class Qwen3ASRThinkerTextModel(Qwen3ASRPreTrainedModel):
         # Initialize weights and apply final processing
         self.post_init()
 
-    @check_model_inputs()
+    @merge_with_config_defaults
     @auto_docstring
     def forward(
         self,
@@ -996,6 +1011,11 @@ class Qwen3ASRThinkerTextModel(Qwen3ASRPreTrainedModel):
         cache_position: Optional[torch.LongTensor] = None,
         **kwargs: Unpack[FlashAttentionKwargs],
     ) -> Union[tuple, BaseModelOutputWithPast]:
+        r"""
+        cache_position (`torch.LongTensor` of shape `(sequence_length,)`, *optional*):
+            Indices depicting the position of the input sequence tokens in the cache. Used to update the KV cache
+            and to determine whether this is the prefill or a subsequent decoding step.
+        """
         if (input_ids is None) ^ (inputs_embeds is not None):
             raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
 
@@ -1086,7 +1106,9 @@ class Qwen3ASRThinkerForConditionalGeneration(Qwen3ASRPreTrainedModelForConditio
             self.lm_head = nn.Linear(config.text_config.hidden_size, config.classify_num, bias=False)
         else:
             self.lm_head = nn.Linear(config.text_config.hidden_size, config.text_config.vocab_size, bias=False)
-        self.pad_token_id = self.config.pad_token_id if self.config.pad_token_id is not None else -1
+        self.pad_token_id = getattr(self.config, "pad_token_id", None)
+        if self.pad_token_id is None:
+            self.pad_token_id = -1
         self.rope_deltas = None
         self.post_init()
 
@@ -1185,6 +1207,9 @@ class Qwen3ASRThinkerForConditionalGeneration(Qwen3ASRPreTrainedModelForConditio
             Labels for computing the masked language modeling loss. Indices should either be in `[0, ...,
             config.vocab_size]` or -100 (see `input_ids` docstring). Tokens with indices set to `-100` are ignored
             (masked), the loss is only computed for the tokens with labels in `[0, ..., config.vocab_size]`.
+        cache_position (`torch.LongTensor` of shape `(sequence_length,)`, *optional*):
+            Indices depicting the position of the input sequence tokens in the cache. Used to update the KV cache
+            and to determine whether this is the prefill or a subsequent decoding step.
         """
 
         if inputs_embeds is None:
@@ -1283,8 +1308,25 @@ class Qwen3ASRThinkerForConditionalGeneration(Qwen3ASRPreTrainedModelForConditio
 
         model_inputs["position_ids"] = None
 
-        if cache_position[0] != 0:
+        effective_cache_position = model_inputs.get("cache_position")
+        if effective_cache_position is None and past_key_values is not None:
+            past_seen = past_key_values.get_seq_length()
+            new_len = (
+                model_inputs["inputs_embeds"].shape[1]
+                if model_inputs.get("inputs_embeds") is not None
+                else model_inputs["input_ids"].shape[1]
+            )
+            device = (
+                model_inputs["inputs_embeds"].device
+                if model_inputs.get("inputs_embeds") is not None
+                else model_inputs["input_ids"].device
+            )
+            effective_cache_position = torch.arange(past_seen, past_seen + new_len, device=device)
+            model_inputs["cache_position"] = effective_cache_position
+
+        if effective_cache_position is not None and effective_cache_position[0] != 0:
             model_inputs["input_features"] = None
+            model_inputs["feature_attention_mask"] = None
 
         return model_inputs
 
