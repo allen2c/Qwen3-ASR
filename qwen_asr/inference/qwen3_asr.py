@@ -27,9 +27,9 @@ from qwen_asr.core.transformers_backend import (
 )
 from transformers import AutoConfig, AutoModel, AutoProcessor
 
-AutoConfig.register("qwen3_asr", Qwen3ASRConfig)
-AutoModel.register(Qwen3ASRConfig, Qwen3ASRForConditionalGeneration)
-AutoProcessor.register(Qwen3ASRConfig, Qwen3ASRProcessor)
+AutoConfig.register("qwen3_asr", Qwen3ASRConfig, exist_ok=True)
+AutoModel.register(Qwen3ASRConfig, Qwen3ASRForConditionalGeneration, exist_ok=True)
+AutoProcessor.register(Qwen3ASRConfig, Qwen3ASRProcessor, exist_ok=True)
 
 from .qwen3_forced_aligner import Qwen3ForcedAligner
 from .utils import (
@@ -72,6 +72,20 @@ def _strip_unused_sampling_flags(model) -> None:
     for key in _SAMPLING_FLAG_KEYS:
         if getattr(gc, key, None) is not None:
             setattr(gc, key, None)
+
+
+def _normalize_audio_mask_key(inputs):
+    """Rename `input_features_mask` back to `feature_attention_mask` in processor outputs.
+
+    transformers v5.13.0 ships a native `qwen3_asr` processor whose audio mask is
+    named `input_features_mask`. `AutoProcessor.from_pretrained` resolves the
+    checkpoint's `processor_class` name against transformers' own modules first,
+    so on >=5.13 the native processor wins over our registered one — while the
+    vendored model forward still expects `feature_attention_mask`.
+    """
+    if "input_features_mask" in inputs:
+        inputs["feature_attention_mask"] = inputs.pop("input_features_mask")
+    return inputs
 
 
 @contextlib.contextmanager
@@ -549,6 +563,7 @@ class Qwen3ASRModel:
             sub_text = texts[i : i + batch_size]
             sub_wavs = wavs[i : i + batch_size]
             inputs = self.processor(text=sub_text, audio=sub_wavs, return_tensors="pt", padding=True)
+            inputs = _normalize_audio_mask_key(inputs)
             inputs = inputs.to(self.model.device).to(self.model.dtype)
 
             text_ids = self.model.generate(**inputs, max_new_tokens=self.max_new_tokens)

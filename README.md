@@ -2,7 +2,7 @@
 
 > **Fork notice.** This is a downstream fork of the original [QwenLM/Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR),
 > repackaged and patched so it runs on NVIDIA DGX Spark (Grace–Blackwell, `aarch64`,
-> CUDA 13) under modern pins: `torch>=2.11`, `transformers>=5,<6`, `vllm>=0.20`.
+> CUDA 13) under modern pins: `torch>=2.11`, `transformers>=5.4,<6`, `vllm>=0.20`.
 > The Python import name is **unchanged (`qwen_asr`)**; only the PyPI distribution
 > name is new: **`qwen-asr-dgxspark`**.
 >
@@ -1459,7 +1459,7 @@ modifications made relative to upstream Qwen3-ASR.
 ### Goal
 Run `quick_inference.py` (and the rest of the `qwen_asr` Python API) on NVIDIA
 DGX Spark hardware (Grace-Blackwell, `aarch64`, CUDA 13) under modern dependency
-pins: `torch>=2.11`, `transformers>=5,<6`, `vllm>=0.20`. Upstream targets
+pins: `torch>=2.11`, `transformers>=5.4,<6`, `vllm>=0.20`. Upstream targets
 `transformers (v4)` and `vllm<0.15`, which do not install on this platform.
 
 ### Code modifications
@@ -1526,16 +1526,48 @@ unchanged.
    "generation flags are not valid" warning on every load. We null those keys
    after load, and filter the load-time log so startup is quiet.
 
+10. **`cli/serve.py` / `inference/qwen3_asr.py` / `inference/qwen3_forced_aligner.py` — `exist_ok=True` auto-class registration** *(v0.1.1)*
+    transformers v5.13.0 added a native `qwen3_asr` model, so re-registering the
+    vendored `Qwen3ASRConfig` / model / processor under the same name raised
+    `ValueError: 'qwen3_asr' is already used`. All three
+    `AutoConfig` / `AutoModel` / `AutoProcessor.register(...)` calls now pass
+    `exist_ok=True`, which keeps the vendored classes authoritative on every
+    transformers version.
+
+11. **`modeling_qwen3_asr.py` — `create_causal_mask` keyword call** *(v0.1.1)*
+    transformers renamed the `input_embeds` parameter to `inputs_embeds`
+    (v5.2.0) and dropped `cache_position` (optional since v5.4.0, removed in
+    v5.9.0). The call in `Qwen3ASRThinkerTextModel.forward` now uses the new
+    keyword form without `cache_position`, which sets this fork's effective
+    floor at `transformers>=5.4`.
+
+12. **`inference/qwen3_asr.py` / `inference/qwen3_forced_aligner.py` — `_normalize_audio_mask_key()` shim** *(v0.1.1)*
+    On transformers >=5.13, `AutoProcessor.from_pretrained` resolves the
+    checkpoint's `processor_class` name against transformers' own modules
+    before consulting the registered mapping, so the **native** processor wins
+    — and it emits the audio mask as `input_features_mask`, while the vendored
+    model forward expects `feature_attention_mask`. Both the transcribe and
+    forced-align paths now rename the key right after the processor call
+    (a no-op on <5.13).
+
+### Compatibility
+
+The `transformers>=5.4,<6` pin is empirically verified: every minor release
+from 5.4 through 5.14 (latest patch of each) was tested with a real-model
+GPU smoke test (`Qwen3-ASR-0.6B` transcribe + `Qwen3-ForcedAligner-0.6B`
+timestamps) on DGX Spark. 5.3.x and older fail (`fix_mistral_regex` /
+`create_causal_mask` API differences); 5.4.0–5.14.1 all pass.
+
 ### Packaging
 
-10. **`pyproject.toml`** — repackaged as a distinct distribution:
+13. **`pyproject.toml`** — repackaged as a distinct distribution:
 
-    | field                | upstream `qwen-asr` 0.0.6 | this fork `qwen-asr-dgxspark` 0.1.0 |
+    | field                | upstream `qwen-asr` 0.0.6 | this fork `qwen-asr-dgxspark` 0.1.1 |
     | -------------------- | ------------------------- | ----------------------------------- |
     | distribution name    | `qwen-asr`                | `qwen-asr-dgxspark`                 |
     | import name          | `qwen_asr`                | `qwen_asr` (unchanged)              |
     | python               | `>=3.9`                   | `>=3.10`                            |
-    | `transformers`       | unbounded                 | `>=5,<6`                            |
+    | `transformers`       | unbounded                 | `>=5.4,<6`                          |
     | `torch`              | unspecified               | `>=2.11,<3`                         |
     | `vllm` (extras)      | `vllm<0.15.0`             | `vllm>=0.20,<1`                     |
     | `gradio` / `flask`   | core deps                 | optional extra `[demo]`             |

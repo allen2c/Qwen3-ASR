@@ -364,9 +364,9 @@ class Qwen3ForcedAligner:
             Qwen3ForcedAligner:
                 Initialized wrapper instance.
         """
-        AutoConfig.register("qwen3_asr", Qwen3ASRConfig)
-        AutoModel.register(Qwen3ASRConfig, Qwen3ASRForConditionalGeneration)
-        AutoProcessor.register(Qwen3ASRConfig, Qwen3ASRProcessor)
+        AutoConfig.register("qwen3_asr", Qwen3ASRConfig, exist_ok=True)
+        AutoModel.register(Qwen3ASRConfig, Qwen3ASRForConditionalGeneration, exist_ok=True)
+        AutoProcessor.register(Qwen3ASRConfig, Qwen3ASRProcessor, exist_ok=True)
 
         from .qwen3_asr import _strip_unused_sampling_flags, _suppress_invalid_generation_flag_warning
 
@@ -446,6 +446,9 @@ class Qwen3ForcedAligner:
             return_tensors="pt",
             padding=True,
         )
+        from .qwen3_asr import _normalize_audio_mask_key
+
+        inputs = _normalize_audio_mask_key(inputs)
         inputs = inputs.to(self.model.device).to(self.model.dtype)
 
         logits = self.model.thinker(**inputs).logits

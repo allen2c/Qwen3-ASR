@@ -1044,11 +1044,14 @@ class Qwen3ASRThinkerTextModel(Qwen3ASRPreTrainedModel):
         else:
             text_position_ids = position_ids[0]
 
+        # transformers renamed `input_embeds` -> `inputs_embeds` (v5.2.0) and dropped
+        # `cache_position` (optional since v5.4.0, removed in v5.9.0) from
+        # create_causal_mask; position is derived from past_key_values internally.
+        # This keyword-only call therefore requires transformers>=5.4.
         attention_mask = create_causal_mask(
             config=self.config,
-            input_embeds=inputs_embeds,
+            inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,
-            cache_position=cache_position,
             past_key_values=past_key_values,
             position_ids=text_position_ids,
         )
